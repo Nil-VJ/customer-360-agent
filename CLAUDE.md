@@ -32,7 +32,8 @@ This file says how to work on it.
 - **staging** (views): one model per source table. Rename, cast, standardise. No joins, no business logic.
   Drop PII here: `first_name`, `last_name`, `email`, `street_address`, `postal_code`, `latitude`, `longitude`.
 - **intermediate** (views): joins and business logic (product category, unit cost, `is_net_revenue` flag).
-- **marts** (tables): `fct_orders`, `fct_order_items`, `dim_customer` (+ `fct_category_views` only if Q5 is in scope).
+  Net revenue = items with status Complete, Shipped or Processing. Cancelled and Returned are excluded.
+- **marts** (tables): `fct_orders`, `fct_order_items`, `dim_customer`. `fct_category_views` (question 5) is out of scope until after Friday.
 - Only marts are read by the agent.
 - Every mart column has a description in YAML. Descriptions are read by humans and by the agent, so be precise.
 
@@ -40,12 +41,13 @@ This file says how to work on it.
 
 - `fct_orders`, `fct_order_items`: partition by `ordered_at`, `granularity: month`; cluster by `customer_id`.
 - `dim_customer`: no partitioning (one row per customer, small).
-- Explain in the README that the data is small; this is the production pattern and it limits the agent's scan cost.
+- The data is small (about 125k orders, 182k order items, 100k users). Explain in the README that this is the
+  production pattern and that it limits the agent's scan cost, not a performance need at this size.
 
 ## Tests (keep to this list)
 
 - Primary keys on every staging model and mart: `unique` + `not_null`.
-- `accepted_values` on order and item `status` in staging (values confirmed in the day-1 checks).
+- `accepted_values` on order and item `status` in staging: Cancelled, Complete, Processing, Returned, Shipped.
 - `relationships`: `fct_orders.customer_id` and `fct_order_items.customer_id` → `dim_customer`.
 - RFM scores between 1 and 5 (`dbt_utils.accepted_range` or a short singular test).
 - One singular test: total net revenue in `fct_orders` equals `fct_order_items` (tolerance 0.01).
@@ -54,8 +56,9 @@ This file says how to work on it.
 ## Agent rules
 
 - Agent logic is a plain Python function `answer(question) -> (text, sql, rows)`.
-  Streamlit (`app.py`) only wraps it, so a command-line fallback is trivial.
-- Context = mart table and column descriptions from `target/manifest.json` + metric definitions from the semantic YAML.
+  Before Friday it runs as a command-line loop (`python agent.py`). Streamlit (`app.py`) wraps it after Friday.
+- Context = mart table and column descriptions from `target/manifest.json`. Before Friday there is no MetricFlow layer,
+  so metric definitions (net revenue, AOV, repeat rate) live in the mart column descriptions.
 - Tool `run_sql(query)`:
   1. BigQuery dry run first. Reject unless statement type is SELECT and every referenced table is in `c360_marts`.
      (Check that the dry-run job exposes these; if not, fall back to parsing with `sqlglot` and ask me first.)
@@ -67,10 +70,18 @@ This file says how to work on it.
 
 ## Phases
 
-1. **Scaffold + staging:** repo layout, requirements, `.gitignore`, dbt project, sources, staging models + tests. `dbt build` green.
-2. **Intermediate + marts:** models, partition/cluster config, relationship/RFM/reconciliation tests. `dbt build` green.
-3. **Semantic layer:** semantic models, metrics, `metricflow_time_spine`. `dbt parse` passes.
-4. **Agent:** `answer()`, `run_sql` guardrails, Streamlit app, eval script over the cases in SPEC.md.
-5. **README:** what it is, architecture (text diagram), how to run, decisions, eval results, limitations.
+Data facts (day-1 checks, 21 Oct): orders run 7 Jan 2019 to today; 46% of web events have no `user_id`.
+Windows like "last 90 days" are measured from the current date.
 
-Hard stop for building: Thursday 12:00. Anything unfinished is dropped, not rushed.
+**Before the interview (Fri 23 Oct)**
+
+1. **Thu morning, Phase 1, scaffold + staging:** repo layout, requirements, `.gitignore`, dbt project, sources, staging models + tests. `dbt build` green.
+2. **Thu morning, Phase 2, intermediate + marts:** models, partition/cluster config, relationship/RFM/reconciliation tests. `dbt build` green.
+   Pause at Thu 13:00 even if Phase 2 is unfinished; I continue after the interview prep.
+3. **Thu evening, optional, minimal agent:** `answer()`, `run_sql` guardrails, command-line loop, the five eval cases. Only if I ask for it.
+
+**After Friday**
+
+4. Semantic layer: MetricFlow semantic models, metrics, `metricflow_time_spine`. `dbt parse` passes.
+5. Streamlit app, question 5 (`fct_category_views`), full eval run.
+6. README: what it is, architecture, how to run, decisions, eval results, limitations.
