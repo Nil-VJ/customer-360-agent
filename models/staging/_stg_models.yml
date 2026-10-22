@@ -1,0 +1,68 @@
+version: 2
+
+models:
+  - name: stg_users
+    description: One row per customer. PII dropped (names, email, street address, postal code, coordinates).
+    columns:
+      - name: customer_id
+        description: Primary key.
+        data_tests:
+          - unique
+          - not_null
+
+  - name: stg_orders
+    description: One row per order.
+    columns:
+      - name: order_id
+        description: Primary key.
+        data_tests:
+          - unique
+          - not_null
+      - name: status
+        description: Order status.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Cancelled', 'Complete', 'Processing', 'Returned', 'Shipped']
+
+  - name: stg_order_items
+    description: One row per item sold.
+    columns:
+      - name: order_item_id
+        description: Primary key.
+        data_tests:
+          - unique
+          - not_null
+      - name: status
+        description: Item status.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['Cancelled', 'Complete', 'Processing', 'Returned', 'Shipped']
+
+  - name: stg_products
+    description: One row per product.
+    columns:
+      - name: product_id
+        description: Primary key.
+        data_tests:
+          - unique
+          - not_null
+
+  - name: stg_inventory_items
+    description: One row per physical unit in stock.
+    columns:
+      - name: inventory_item_id
+        description: Primary key.
+        data_tests:
+          - unique
+          - not_null
+
+  - name: stg_events
+    description: One row per web event.
+    columns:
+      - name: event_id
+        description: Primary key.
+        data_tests:
+          - unique
+          - not_null

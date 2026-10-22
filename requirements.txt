@@ -1,0 +1,4 @@
+# Pinned to the exact versions installed on 22 Oct 2026 (Python 3.12).
+# CI must install from this file: pip install -r requirements.txt
+dbt-core==1.12.6
+dbt-bigquery==1.12.1

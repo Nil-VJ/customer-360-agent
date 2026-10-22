@@ -1,0 +1,25 @@
+version: 2
+
+sources:
+  - name: thelook_ecommerce
+    description: >
+      BigQuery public dataset of a synthetic clothing webshop. Read-only. Lives in the US multi-region.
+    database: bigquery-public-data
+    schema: thelook_ecommerce
+    tables:
+      - name: users
+        description: One row per customer. Holds names, email and address (PII), dropped in staging.
+      - name: orders
+        description: One row per order with status and lifecycle timestamps.
+        config:
+          loaded_at_field: created_at
+          freshness:
+            warn_after: {count: 36, period: hour}
+      - name: order_items
+        description: One row per item sold. sale_price is the price paid at purchase time.
+      - name: inventory_items
+        description: One row per physical unit in stock. Carries unit cost.
+      - name: products
+        description: One row per product with category, brand, department and retail price.
+      - name: events
+        description: One row per web event (home, product, cart, purchase and others).
