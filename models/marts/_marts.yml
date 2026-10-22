@@ -1,0 +1,134 @@
+version: 2
+
+models:
+  - name: fct_order_items
+    description: >
+      One row per item sold. Grain: order item. Revenue is sale_price, the price paid at purchase time.
+      Net revenue counts only rows where is_net_revenue is true (status Complete, Shipped or Processing).
+      Partitioned by month of ordered_at, clustered by customer_id.
+    columns:
+      - name: order_item_id
+        description: Primary key. One row per item sold.
+        data_tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: The order this item belongs to. Joins to fct_orders.order_id.
+      - name: customer_id
+        description: The customer who bought the item. Joins to dim_customer.customer_id.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customer_id
+      - name: ordered_at
+        description: Timestamp (UTC) when the item was ordered. Partition column.
+      - name: status
+        description: Item status. One of Cancelled, Complete, Processing, Returned, Shipped.
+      - name: category
+        description: Product category, for example Jeans, Outerwear & Coats, Swim. 26 distinct values.
+      - name: brand
+        description: Product brand.
+      - name: sale_price
+        description: Price the customer paid for this item, in USD (NUMERIC).
+      - name: cost
+        description: Unit cost of the inventory item sold, in USD (NUMERIC).
+      - name: margin
+        description: sale_price minus cost, in USD. Gross margin for the item before any other costs.
+      - name: is_net_revenue
+        description: >
+          True when status is Complete, Shipped or Processing. False for Cancelled and Returned.
+          Filter on this to compute net revenue and gross margin.
+
+  - name: fct_orders
+    description: >
+      One row per order. Grain: order. Revenue totals are rolled up from fct_order_items.
+      Net revenue = sum of sale_price for items with status Complete, Shipped or Processing.
+      Gross revenue = sum of sale_price for all items. Average order value (AOV) = net_revenue / count of orders.
+      Partitioned by month of ordered_at, clustered by customer_id.
+    columns:
+      - name: order_id
+        description: Primary key. One row per order.
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: The customer who placed the order. Joins to dim_customer.customer_id.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_customer')
+                field: customer_id
+      - name: ordered_at
+        description: Timestamp (UTC) when the order was placed. Partition column. Use for all date windows.
+      - name: status
+        description: Order status. One of Cancelled, Complete, Processing, Returned, Shipped.
+      - name: items
+        description: Number of items in the order.
+      - name: gross_revenue
+        description: Sum of sale_price for all items in the order, in USD, including cancelled and returned items.
+      - name: net_revenue
+        description: >
+          Sum of sale_price for items with status Complete, Shipped or Processing, in USD.
+          This is the revenue metric to use unless gross revenue is asked for explicitly.
+      - name: margin
+        description: Sum of (sale_price minus cost) for net-revenue items, in USD.
+
+  - name: dim_customer
+    description: >
+      One row per customer, including customers who never ordered. Grain: customer.
+      Holds profile attributes, order history, RFM scores and the RFM segment.
+      Contains no PII: no names, emails or addresses.
+      Repeat rate = customers with is_repeat true / customers with total_orders > 0.
+      "Not bought in 90+ days" means days_since_last_order >= 90.
+    columns:
+      - name: customer_id
+        description: Primary key. One row per customer.
+        data_tests:
+          - unique
+          - not_null
+      - name: country
+        description: Customer country, for example China, United States, Brasil. 16 distinct values.
+      - name: age_band
+        description: Age group. One of Under 18, 18-24, 25-34, 35-44, 45-54, 55-64, 65+.
+      - name: gender
+        description: Customer gender as recorded, F or M.
+      - name: traffic_source
+        description: >
+          Acquisition channel recorded at signup. One of Search, Organic, Facebook, Email, Display.
+          Use for "by acquisition traffic source".
+      - name: signed_up_at
+        description: Timestamp (UTC) when the customer account was created.
+      - name: first_order_at
+        description: Timestamp of the customer's first order. Null if the customer never ordered.
+      - name: last_order_at
+        description: Timestamp of the customer's most recent order. Null if the customer never ordered.
+      - name: days_since_last_order
+        description: Days between today and last_order_at. Null if the customer never ordered.
+      - name: total_orders
+        description: Number of orders placed, any status. 0 if the customer never ordered.
+      - name: net_revenue
+        description: Lifetime net revenue in USD (items with status Complete, Shipped or Processing). 0 if never ordered.
+      - name: avg_order_value
+        description: net_revenue divided by total_orders, in USD. Null if the customer never ordered.
+      - name: is_repeat
+        description: True when total_orders is 2 or more. A customer who bought only once has is_repeat false and total_orders 1.
+      - name: top_category
+        description: Product category with the highest lifetime net revenue for this customer. Null if never ordered.
+      - name: rfm_r
+        description: >
+          Recency score 1 to 5 (5 = most recent last order). NTILE(5) over all customers with at least one order.
+          Null if the customer never ordered.
+      - name: rfm_f
+        description: >
+          Frequency score 1 to 5 (5 = most orders). NTILE(5) over all customers with at least one order.
+          Most customers have 1 or 2 orders, so NTILE splits ties by customer_id. Null if never ordered.
+      - name: rfm_m
+        description: >
+          Monetary score 1 to 5 (5 = highest lifetime net revenue). NTILE(5) over all customers with at least one order.
+          "High-value customer" means rfm_m >= 4. Null if never ordered.
+      - name: rfm_segment
+        description: >
+          One of Champions (R, F and M all 4 or 5), Loyal (F 4 or 5), New (R 5 and F 1 or 2),
+          At risk (R 1 or 2 with F or M 3 or more), Hibernating (other R 1 or 2), Other (everything else,
+          including customers who never ordered).

@@ -16,3 +16,9 @@ models:
     staging:
       +materialized: view
       +schema: staging   # resolves to dataset c360_staging
+    intermediate:
+      +materialized: view
+      +schema: intermediate   # resolves to dataset c360_intermediate
+    marts:
+      +materialized: table
+      +schema: marts          # resolves to dataset c360_marts; the only dataset the agent reads

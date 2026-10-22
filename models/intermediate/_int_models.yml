@@ -1,0 +1,12 @@
+version: 2
+
+models:
+  - name: int_order_items_enriched
+    description: >
+      One row per order item with product category, brand, unit cost, margin and the is_net_revenue flag.
+      Net revenue items have status Complete, Shipped or Processing. Cancelled and Returned are excluded.
+    columns:
+      - name: category
+        description: Product category from stg_products.
+        data_tests:
+          - not_null

@@ -43,7 +43,7 @@ This file says how to work on it.
   Drop PII here: `first_name`, `last_name`, `email`, `street_address`, `postal_code`, `latitude`, `longitude`.
 - **intermediate** (views): joins and business logic (product category, unit cost, `is_net_revenue` flag).
   Net revenue = items with status Complete, Shipped or Processing. Cancelled and Returned are excluded.
-- **marts** (tables): `fct_orders`, `fct_order_items`, `dim_customer`. `fct_category_views` (question 5) is out of scope until after Friday.
+- **marts** (tables): `fct_orders`, `fct_order_items`, `dim_customer`. `fct_category_views` (question 5) is built in Phase 5.
 - Only marts are read by the agent.
 - Every mart column has a description in YAML. Descriptions are read by humans and by the agent, so be precise.
 
@@ -66,9 +66,9 @@ This file says how to work on it.
 ## Agent rules
 
 - Agent logic is a plain Python function `answer(question) -> (text, sql, rows)`.
-  Before Friday it runs as a command-line loop (`python agent.py`). Streamlit (`app.py`) wraps it after Friday.
-- Context = mart table and column descriptions from `target/manifest.json`. Before Friday there is no MetricFlow layer,
-  so metric definitions (net revenue, AOV, repeat rate) live in the mart column descriptions.
+  It runs first as a command-line loop (`python agent.py`). Streamlit (`app.py`) wraps it in Phase 5.
+- Context = mart table and column descriptions from `target/manifest.json`. Until the semantic layer exists (Phase 4),
+  metric definitions (net revenue, AOV, repeat rate) live in the mart column descriptions.
 - Tool `run_sql(query)`:
   1. BigQuery dry run first. Reject unless statement type is SELECT and every referenced table is in `c360_marts`.
      (Check that the dry-run job exposes these; if not, fall back to parsing with `sqlglot` and ask me first.)
@@ -83,15 +83,11 @@ This file says how to work on it.
 Data facts (day-1 checks, 21 Oct): orders run 7 Jan 2019 to today; 46% of web events have no `user_id`.
 Windows like "last 90 days" are measured from the current date.
 
-**Before the interview (Fri 23 Oct)**
+There is no deadline. This project is a priority. Work through the phases in order and stop for review after each one.
 
-1. **Thu morning, Phase 1, scaffold + staging:** repo layout, requirements, `.gitignore`, dbt project, sources, staging models + tests. `dbt build` green.
-2. **Thu morning, Phase 2, intermediate + marts:** models, partition/cluster config, relationship/RFM/reconciliation tests. `dbt build` green.
-   Pause at Thu 13:00 even if Phase 2 is unfinished; I continue after the interview prep.
-3. **Thu evening, optional, minimal agent:** `answer()`, `run_sql` guardrails, command-line loop, the five eval cases. Only if I ask for it.
-
-**After Friday**
-
-4. Semantic layer: MetricFlow semantic models, metrics, `metricflow_time_spine`. `dbt parse` passes.
-5. Streamlit app, question 5 (`fct_category_views`), full eval run.
-6. README: what it is, architecture, how to run, decisions, eval results, limitations.
+1. **Phase 1, scaffold + staging:** repo layout, requirements, `.gitignore`, dbt project, sources, staging models + tests. `dbt build` green.
+2. **Phase 2, intermediate + marts:** models, partition/cluster config, relationship/RFM/reconciliation tests. `dbt build` green.
+3. **Phase 3, minimal agent:** `answer()`, `run_sql` guardrails, command-line loop, the five eval cases.
+4. **Phase 4, semantic layer:** MetricFlow semantic models, metrics, `metricflow_time_spine`. `dbt parse` passes.
+5. **Phase 5, app and stretch question:** Streamlit app, question 5 (`fct_category_views`), full eval run.
+6. **Phase 6, README:** what it is, architecture, how to run, decisions, eval results, limitations.
