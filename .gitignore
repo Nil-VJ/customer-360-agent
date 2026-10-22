@@ -159,3 +159,6 @@ target/
 dbt_packages/
 logs/
 dbt_internal_packages/
+
+# Editor
+.vscode/
