@@ -3,6 +3,16 @@
 Read `SPEC.md` first. It is the source of truth for scope, models, metrics and tests.
 This file says how to work on it.
 
+## How to talk to me
+
+- Use simple, plain words. Explain any technical term in one short phrase the first time.
+- Keep answers short: lead with the answer, then at most a few bullets. No long paragraphs.
+- I am a visual person: show, don't only tell.
+  - In the terminal: small ASCII diagrams for flows and model lineage, and tables for comparisons and options.
+  - For anything worth keeping (architecture, model lineage, data flow), write a Mermaid diagram into a Markdown file
+    under `docs/` so it renders on GitHub.
+  - When explaining data (row counts, distributions, test results), show a small table or ASCII bar chart, not only prose.
+
 ## How we work
 
 - Work in phases (below). Use plan mode first. After each phase, STOP and wait for my review.
