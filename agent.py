@@ -150,15 +150,27 @@ def run_sql(query):
     return rows, query, None
 
 
+def join_queries(queries):
+    """Combine every query that ran into one SQL text, numbered when there is more than one."""
+    if not queries:
+        return None
+    if len(queries) == 1:
+        return queries[0]
+    return "\n\n".join(f"-- Query {i} of {len(queries)}\n{q};" for i, q in enumerate(queries, start=1))
+
+
 def answer(question):
-    """Answer one question. Return (text, sql, rows): sql and rows are from the last successful query."""
+    """Answer one question. Return (text, sql, rows).
+
+    sql holds every query that ran, in order. rows are from the last successful query.
+    """
     global SYSTEM_PROMPT
     if SYSTEM_PROMPT is None:
         SYSTEM_PROMPT = ANSWER_RULES + "\nMart tables:\n" + load_mart_context()
 
     today = datetime.date.today().isoformat()
     messages = [{"role": "user", "content": f"Today is {today}.\n\nQuestion: {question}"}]
-    sql, rows = None, None
+    queries, rows = [], None
     failed_queries, tool_calls = 0, 0
 
     while True:
@@ -177,7 +189,7 @@ def answer(question):
                 text += "\n\n(Answer cut off: the model hit its output limit.)"
             elif response.stop_reason == "refusal":
                 text = text or "The model declined to answer this question."
-            return text, sql, rows
+            return text, join_queries(queries), rows
 
         messages.append({"role": "assistant", "content": response.content})
         tool_results = []
@@ -190,16 +202,18 @@ def answer(question):
                 failed_queries += 1
                 content, is_error = error, True
             else:
-                sql, rows = query_ran, query_rows
+                queries.append(query_ran)
+                rows = query_rows
                 content, is_error = json.dumps(query_rows, default=str), False
             tool_results.append(
                 {"type": "tool_result", "tool_use_id": block.id, "content": content, "is_error": is_error}
             )
 
             if failed_queries >= MAX_FAILED_QUERIES:
-                return f"I could not answer this: the query failed twice. Last error: {error}", sql, rows
+                text = f"I could not answer this: the query failed twice. Last error: {error}"
+                return text, join_queries(queries), rows
         if tool_calls >= MAX_TOOL_CALLS:
-            return "I could not answer this within the query limit for one question.", sql, rows
+            return "I could not answer this within the query limit for one question.", join_queries(queries), rows
         messages.append({"role": "user", "content": tool_results})
 
 

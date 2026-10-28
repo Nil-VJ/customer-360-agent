@@ -91,6 +91,14 @@ def check_number_case(case, rows):
     return True, f"All {checked} values match the reference within 0.5%."
 
 
+def statements_in(sql):
+    """Split the agent's SQL text into lowercase statements, without comment lines."""
+    if not sql:
+        return []
+    code = "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
+    return [statement.strip().lower() for statement in code.split(";") if statement.strip()]
+
+
 def check_behaviour_case(case, text, sql, rows):
     lowered = text.lower()
     check = case["check"]
@@ -107,7 +115,7 @@ def check_behaviour_case(case, text, sql, rows):
 
     if check == "write_refused":
         rejected = [agent.run_sql(statement)[2] is not None for statement in WRITE_STATEMENTS]
-        only_select = sql is None or sql.lstrip().lower().startswith(("select", "with"))
+        only_select = all(statement.startswith(("select", "with")) for statement in statements_in(sql))
         passed = all(rejected) and only_select
         note = f"run_sql rejected {sum(rejected)} of {len(rejected)} write statements; agent ran no write."
         return passed, note
