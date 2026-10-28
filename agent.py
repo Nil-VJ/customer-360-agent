@@ -1,4 +1,4 @@
-"""Customer 360 agent: answers marketing questions with SQL over the dbt marts.
+"""Customer 360 agent: answers marketing questions with SQL over the dbt marts and MetricFlow metrics.
 
 Usage:
     python agent.py                      # interactive loop
@@ -9,6 +9,7 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,7 +18,11 @@ from dotenv import load_dotenv
 from google.cloud import bigquery
 
 MODEL = "claude-opus-5-5"
-MANIFEST_PATH = Path(__file__).parent / "target" / "manifest.json"
+PROJECT_DIR = Path(__file__).parent
+MANIFEST_PATH = PROJECT_DIR / "target" / "manifest.json"
+SEMANTIC_MANIFEST_PATH = PROJECT_DIR / "target" / "semantic_manifest.json"
+MF_BIN = Path(sys.executable).parent / "mf"  # MetricFlow CLI installed in the same venv
+TIME_SPINE = "metricflow_time_spine"  # used by MetricFlow only, so not shown to the model as a table
 MARTS_PROJECT = "ecommerce-customer-360"
 MARTS_DATASET = "c360_marts"
 MAX_BYTES = 1_000_000_000  # 1 GB
@@ -39,18 +44,69 @@ RUN_SQL_TOOL = {
     },
 }
 
+QUERY_METRIC_TOOL = {
+    "name": "query_metric",
+    "description": (
+        "Compute defined metrics from the semantic layer with MetricFlow and return the rows as JSON "
+        "(at most 200 rows). MetricFlow writes the SQL; it then runs through the same checks as run_sql. "
+        "Use the metric and dimension names listed in the system prompt exactly."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "metrics": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Metric names, for example [\"avg_order_value\", \"repeat_customer_rate\"].",
+            },
+            "group_by": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Dimensions to group by, for example [\"customer__country\", \"order_item__category\", "
+                    "\"metric_time__quarter\"]."
+                ),
+            },
+            "where": {
+                "type": "string",
+                "description": (
+                    "Optional filter in MetricFlow syntax, for example "
+                    "\"{{ Dimension('customer__is_repeat') }} = true\" or "
+                    "\"{{ Dimension('customer__country') }} = 'Brasil'\"."
+                ),
+            },
+            "start_time": {"type": "string", "description": "Optional first day of the window, YYYY-MM-DD, inclusive."},
+            "end_time": {"type": "string", "description": "Optional last day of the window, YYYY-MM-DD, inclusive."},
+            "order_by": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional sort, metric or dimension names. Prefix with - for descending: [\"-net_revenue\"].",
+            },
+            "limit": {"type": "integer", "description": "Optional maximum number of rows."},
+        },
+        "required": ["metrics"],
+    },
+}
+
 ANSWER_RULES = """\
-You answer questions from an e-commerce marketing director by querying the mart tables below with the run_sql tool.
+You answer questions from an e-commerce marketing director with two tools:
+query_metric for the defined metrics below, and run_sql for SQL on the mart tables below.
 
 Rules:
-- Use run_sql for every question about the data. Never invent numbers.
+- Use a tool for every question about the data. Never invent numbers.
+- If the question asks for a defined metric (net revenue, orders, active customers, AOV, gross margin,
+  repeat customer rate), use query_metric, grouped by dimensions and limited to a date window as needed.
+- Use run_sql for everything else: customer lists, counts or shares of customers that are not defined
+  metrics, and columns the semantic layer does not expose. If query_metric fails because a dimension
+  or filter is not available, use run_sql instead.
 - Use only the tables and columns listed below. They contain no emails, names or addresses,
   so decline any request for personal contact data.
 - You report history only. Do not forecast or predict future values.
 - If a question is vague, either ask which metric and period the user means,
   or pick a sensible default and state it.
 - If the question cannot be answered from these tables, say so instead of guessing.
-- Use the metric definitions in the descriptions (net revenue, AOV, repeat rate, high-value customer).
+- Use the metric definitions below and in the column descriptions (net revenue, AOV, repeat rate,
+  high-value customer).
 - Date windows are measured from today's date, which is given with each question:
   "last N days" = the N days before today; "last quarter" = the previous full calendar quarter.
 - Shares and rates use customers with at least one order as the denominator unless the question says otherwise.
@@ -67,12 +123,36 @@ def load_mart_context(manifest_path=MANIFEST_PATH):
 
     lines = []
     for node in manifest["nodes"].values():
-        if node["resource_type"] != "model" or node["schema"] != MARTS_DATASET:
+        if node["resource_type"] != "model" or node["schema"] != MARTS_DATASET or node["name"] == TIME_SPINE:
             continue
         table = f"`{node['database']}.{node['schema']}.{node['alias']}`"
         lines.append(f"\nTable {table}\n{node['description'].strip()}\nColumns:")
         for column in node["columns"].values():
             lines.append(f"- {column['name']}: {column['description'].strip()}")
+    return "\n".join(lines)
+
+
+def load_metric_context(semantic_manifest_path=SEMANTIC_MANIFEST_PATH):
+    """Build the metric and dimension list from MetricFlow's semantic manifest."""
+    if not semantic_manifest_path.exists():
+        sys.exit(f"Missing {semantic_manifest_path}. Run `dbt parse` first.")
+    manifest = json.loads(semantic_manifest_path.read_text())
+
+    lines = ["\nMetrics (use with query_metric):"]
+    for metric in manifest["metrics"]:
+        lines.append(f"- {metric['name']} ({metric['type']}): {' '.join(metric['description'].split())}")
+
+    lines.append("\nDimensions (use in group_by and where, written as entity__dimension):")
+    for model in manifest["semantic_models"]:
+        entity = next(e["name"] for e in model["entities"] if e["type"] == "primary")
+        for dimension in model["dimensions"]:
+            if dimension["type"] == "time":
+                continue
+            lines.append(f"- {entity}__{dimension['name']}: {dimension['description']}")
+    lines.append(
+        "- metric_time__day, metric_time__week, metric_time__month, metric_time__quarter, metric_time__year: "
+        "the order date for order and item metrics. start_time and end_time filter on it."
+    )
     return "\n".join(lines)
 
 
@@ -151,22 +231,70 @@ def run_sql(query):
 
 
 def join_queries(queries):
-    """Combine every query that ran into one SQL text, numbered when there is more than one."""
+    """Combine every (tool, query) that ran into one SQL text, each labelled with the tool that made it."""
     if not queries:
         return None
     if len(queries) == 1:
-        return queries[0]
-    return "\n\n".join(f"-- Query {i} of {len(queries)}\n{q};" for i, q in enumerate(queries, start=1))
+        tool, query = queries[0]
+        return f"-- via {tool}\n{query}"
+    return "\n\n".join(
+        f"-- Query {i} of {len(queries)}, via {tool}\n{query};" for i, (tool, query) in enumerate(queries, start=1)
+    )
+
+
+def as_list(value):
+    """Accept a single string or a list of strings."""
+    if not value:
+        return []
+    return [value] if isinstance(value, str) else [str(v) for v in value]
+
+
+def query_metric(tool_input):
+    """Let MetricFlow write the SQL for the requested metrics, then run it through run_sql's checks.
+
+    Return (rows, sql_ran, error), like run_sql.
+    """
+    metrics = as_list(tool_input.get("metrics"))
+    if not metrics:
+        return None, None, "Give at least one metric name."
+
+    args = [str(MF_BIN), "query", "--metrics", ",".join(metrics)]
+    if tool_input.get("group_by"):
+        args += ["--group-by", ",".join(as_list(tool_input["group_by"]))]
+    if tool_input.get("where"):
+        args += ["--where", tool_input["where"]]
+    if tool_input.get("start_time"):
+        args += ["--start-time", tool_input["start_time"]]
+    if tool_input.get("end_time"):
+        args += ["--end-time", tool_input["end_time"]]
+    if tool_input.get("order_by"):
+        args += ["--order", ",".join(as_list(tool_input["order_by"]))]
+    if tool_input.get("limit"):
+        args += ["--limit", str(int(tool_input["limit"]))]
+    args += ["--explain", "--quiet"]  # print the SQL only; run_sql executes it
+
+    # MetricFlow needs the dbt profile, not the Anthropic key.
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    env.setdefault("DBT_PROFILES_DIR", str(Path.home() / ".dbt"))
+    try:
+        result = subprocess.run(args, cwd=PROJECT_DIR, env=env, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return None, None, "MetricFlow timed out."
+
+    output = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout + result.stderr).strip()
+    if result.returncode != 0 or not re.match(r"(with|select)\b", output, flags=re.IGNORECASE):
+        return None, None, f"MetricFlow could not build this query: {output[-1500:]}"
+    return run_sql(output)
 
 
 def answer(question):
     """Answer one question. Return (text, sql, rows).
 
-    sql holds every query that ran, in order. rows are from the last successful query.
+    sql holds every query that ran, in order, labelled with its tool. rows are from the last successful query.
     """
     global SYSTEM_PROMPT
     if SYSTEM_PROMPT is None:
-        SYSTEM_PROMPT = ANSWER_RULES + "\nMart tables:\n" + load_mart_context()
+        SYSTEM_PROMPT = ANSWER_RULES + load_metric_context() + "\n\nMart tables:\n" + load_mart_context()
 
     today = datetime.date.today().isoformat()
     messages = [{"role": "user", "content": f"Today is {today}.\n\nQuestion: {question}"}]
@@ -179,7 +307,7 @@ def answer(question):
             max_tokens=16000,
             output_config={"effort": "high"},
             system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-            tools=[RUN_SQL_TOOL],
+            tools=[QUERY_METRIC_TOOL, RUN_SQL_TOOL],
             messages=messages,
         )
         text = "\n".join(block.text for block in response.content if block.type == "text").strip()
@@ -197,12 +325,15 @@ def answer(question):
             if block.type != "tool_use":
                 continue
             tool_calls += 1
-            query_rows, query_ran, error = run_sql(block.input.get("query", ""))
+            if block.name == "query_metric":
+                query_rows, query_ran, error = query_metric(block.input)
+            else:
+                query_rows, query_ran, error = run_sql(block.input.get("query", ""))
             if error:
                 failed_queries += 1
                 content, is_error = error, True
             else:
-                queries.append(query_ran)
+                queries.append((block.name, query_ran))
                 rows = query_rows
                 content, is_error = json.dumps(query_rows, default=str), False
             tool_results.append(

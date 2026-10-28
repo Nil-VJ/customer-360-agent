@@ -9,3 +9,6 @@ dbt-bigquery==1.12.1
 anthropic==2.3.0
 google-cloud-bigquery==3.46.2
 python-dotenv==1.2.4
+
+# Semantic layer CLI (installed 28 Oct 2026). dbt-core already includes metricflow.
+dbt-metricflow==0.15.0

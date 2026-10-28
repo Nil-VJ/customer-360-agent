@@ -132,3 +132,17 @@ models:
           One of Champions (R, F and M all 4 or 5), Loyal (F 4 or 5), New (R 5 and F 1 or 2),
           At risk (R 1 or 2 with F or M 3 or more), Hibernating (other R 1 or 2), Other (everything else,
           including customers who never ordered).
+
+  - name: metricflow_time_spine
+    description: >
+      One row per calendar day from 2019-01-01 to one year after today. Used only by MetricFlow
+      to group metrics by day, week, month, quarter or year. Not a business table.
+    time_spine:
+      standard_granularity_column: date_day
+    columns:
+      - name: date_day
+        description: Calendar date. Primary key.
+        granularity: day
+        data_tests:
+          - unique
+          - not_null

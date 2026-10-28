@@ -5,7 +5,9 @@ Usage: python evals/run_evals.py
 
 import datetime
 import json
+import re
 import sys
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -66,6 +68,32 @@ def find_agent_row(reference_row, key_columns, agent_rows):
     return matches
 
 
+def statements_in(sql):
+    """Split the agent's SQL text into lowercase statements, without comment lines."""
+    return [statement.lower() for statement in queries_in(sql)]
+
+
+def queries_in(sql):
+    """Split the agent's SQL text into its separate queries, without the label comment lines."""
+    if not sql:
+        return []
+    code = "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
+    return [statement.strip() for statement in code.split(";") if statement.strip()]
+
+
+def rows_from_every_query(sql, rows):
+    """answer() returns rows from the last query only. When the agent ran several, re-run each one
+    so the numbers it used from earlier queries are graded too."""
+    queries = queries_in(sql)
+    if len(queries) <= 1:
+        return rows
+    all_rows = []
+    for query in queries:
+        query_rows, _, error = agent.run_sql(query)
+        all_rows += query_rows or []
+    return all_rows
+
+
 def check_number_case(case, rows):
     reference_rows = run_reference(case["reference_sql"])
     if case.get("top_n"):
@@ -91,12 +119,6 @@ def check_number_case(case, rows):
     return True, f"All {checked} values match the reference within 0.5%."
 
 
-def statements_in(sql):
-    """Split the agent's SQL text into lowercase statements, without comment lines."""
-    if not sql:
-        return []
-    code = "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
-    return [statement.strip().lower() for statement in code.split(";") if statement.strip()]
 
 
 def check_behaviour_case(case, text, sql, rows):
@@ -127,22 +149,29 @@ def check_behaviour_case(case, text, sql, rows):
     raise ValueError(f"Unknown check: {check}")
 
 
+def tools_used(sql):
+    """Tools named in the agent's SQL labels, in order, for example 'query_metric, run_sql'."""
+    return ", ".join(re.findall(r"via (query_metric|run_sql)", sql or "")) or "none"
+
+
 def main():
     cases = json.loads((EVALS_DIR / "cases.json").read_text())["cases"]
     results = []
     for case in cases:
         print(f"Running {case['id']}: {case['question']}")
+        started = time.time()
         try:
             text, sql, rows = agent.answer(case["question"])
         except Exception as error:
-            results.append((case, False, f"Agent error: {error}", "", None))
+            results.append((case, False, f"Agent error: {error}", "", None, 0.0))
             continue
+        seconds = time.time() - started
         if case["kind"] == "number":
-            passed, note = check_number_case(case, rows)
+            passed, note = check_number_case(case, rows_from_every_query(sql, rows))
         else:
             passed, note = check_behaviour_case(case, text, sql, rows)
-        print(f"  {'PASS' if passed else 'FAIL'}: {note}")
-        results.append((case, passed, note, text, sql))
+        print(f"  {'PASS' if passed else 'FAIL'} in {seconds:.0f}s via {tools_used(sql)}: {note}")
+        results.append((case, passed, note, text, sql, seconds))
 
     passed_numbers = sum(1 for c, p, *_ in results if c["kind"] == "number" and p)
     total_numbers = sum(1 for c, *_ in results if c["kind"] == "number")
@@ -157,14 +186,16 @@ def main():
         f"**{passed_all} of {len(results)} cases pass.** Business questions: {passed_numbers} of {total_numbers} "
         "match the reference SQL (pass bar: 4 of 5).",
         "",
-        "| Case | Result | Note |",
-        "| --- | --- | --- |",
+        "| Case | Result | Tools used | Time | Note |",
+        "| --- | --- | --- | --- | --- |",
     ]
-    for case, passed, note, _, _ in results:
-        lines.append(f"| {case['id']} | {'Pass' if passed else 'Fail'} | {note} |")
+    for case, passed, note, _, sql, seconds in results:
+        lines.append(
+            f"| {case['id']} | {'Pass' if passed else 'Fail'} | {tools_used(sql)} | {seconds:.0f}s | {note} |"
+        )
 
     lines += ["", "## Answers", "", "Behaviour cases are checked by simple rules, so read the answers below to confirm."]
-    for case, _, _, text, sql in results:
+    for case, _, _, text, sql, _ in results:
         lines += ["", f"### {case['id']}: {case['question']}", "", f"Expected: {case.get('expected', 'same number as the reference SQL')}", ""]
         lines += [text or "(no text)", ""]
         lines += ["```sql", sql or "-- no query run", "```"]

@@ -1,0 +1,181 @@
+version: 2
+
+# MetricFlow semantic layer. Metric definitions live here once; the agent reads them from
+# target/semantic_manifest.json. Descriptions are written for an analyst and for the model.
+
+semantic_models:
+  - name: orders
+    description: One row per order. Source of order counts and active customers.
+    model: ref('fct_orders')
+    defaults:
+      agg_time_dimension: ordered_at
+    entities:
+      - name: order_id
+        type: primary
+        description: The order. Named order_id because ORDER is a reserved SQL word.
+      - name: customer
+        type: foreign
+        expr: customer_id
+        description: The customer who placed the order.
+    dimensions:
+      - name: ordered_at
+        type: time
+        description: When the order was placed (UTC).
+        type_params:
+          time_granularity: day
+      - name: status
+        type: categorical
+        description: Order status. One of Cancelled, Complete, Processing, Returned, Shipped.
+    measures:
+      - name: order_count
+        description: Number of orders, any status.
+        agg: count
+        expr: order_id
+      - name: active_customers
+        description: Distinct customers who placed at least one order, any status.
+        agg: count_distinct
+        expr: customer_id
+
+  - name: order_items
+    description: One row per item sold. Source of net revenue and gross margin, so both can be split by category.
+    model: ref('fct_order_items')
+    defaults:
+      agg_time_dimension: ordered_at
+    entities:
+      - name: order_item
+        type: primary
+        expr: order_item_id
+        description: The item sold.
+      - name: order_id
+        type: foreign
+        description: The order the item belongs to.
+      - name: customer
+        type: foreign
+        expr: customer_id
+        description: The customer who bought the item.
+    dimensions:
+      - name: ordered_at
+        type: time
+        description: When the item was ordered (UTC).
+        type_params:
+          time_granularity: day
+      - name: status
+        type: categorical
+        description: Item status. One of Cancelled, Complete, Processing, Returned, Shipped.
+      - name: category
+        type: categorical
+        description: Product category, for example Jeans or Outerwear & Coats. 26 values.
+    measures:
+      - name: net_revenue
+        description: Sum of sale_price for items with status Complete, Shipped or Processing, in USD.
+        agg: sum
+        expr: case when is_net_revenue then sale_price else 0 end
+      - name: gross_margin
+        description: Sum of sale_price minus cost for items with status Complete, Shipped or Processing, in USD.
+        agg: sum
+        expr: case when is_net_revenue then margin else 0 end
+
+  - name: customers
+    description: One row per customer, including customers who never ordered. Source of the repeat rate.
+    model: ref('dim_customer')
+    defaults:
+      agg_time_dimension: signed_up_at
+    entities:
+      - name: customer
+        type: primary
+        expr: customer_id
+        description: The customer.
+    dimensions:
+      - name: signed_up_at
+        type: time
+        description: When the customer account was created (UTC).
+        type_params:
+          time_granularity: day
+      - name: country
+        type: categorical
+        description: Customer country, for example China, United States, Brasil. 16 values.
+      - name: age_band
+        type: categorical
+        description: Age group. One of Under 18, 18-24, 25-34, 35-44, 45-54, 55-64, 65+.
+      - name: traffic_source
+        type: categorical
+        description: Acquisition channel at signup. One of Search, Organic, Facebook, Email, Display.
+      - name: rfm_segment
+        type: categorical
+        description: RFM segment. One of Champions, Loyal, New, At risk, Hibernating, Other.
+      - name: is_repeat
+        type: categorical
+        description: True when the customer has 2 or more lifetime orders. Use to filter to repeat customers.
+    measures:
+      - name: customers_with_orders
+        description: Customers with at least one lifetime order.
+        agg: sum
+        expr: case when total_orders > 0 then 1 else 0 end
+      - name: repeat_customers
+        description: Customers with 2 or more lifetime orders.
+        agg: sum
+        expr: case when is_repeat then 1 else 0 end
+
+metrics:
+  - name: net_revenue
+    label: Net revenue
+    description: >
+      Sum of sale_price for items not cancelled or returned, in USD. The default revenue metric.
+      Can be split by order_item__category and by customer dimensions.
+    type: simple
+    type_params:
+      measure: net_revenue
+
+  - name: order_count
+    label: Orders
+    description: Number of orders, any status.
+    type: simple
+    type_params:
+      measure: order_count
+
+  - name: active_customers
+    label: Active customers
+    description: Distinct customers with at least one order in the period.
+    type: simple
+    type_params:
+      measure: active_customers
+
+  - name: avg_order_value
+    label: Average order value (AOV)
+    description: net_revenue divided by order_count, in USD. Cancelled and returned orders count in the denominator.
+    type: ratio
+    type_params:
+      numerator: net_revenue
+      denominator: order_count
+
+  - name: gross_margin
+    label: Gross margin
+    description: Sum of (sale_price minus cost) for items not cancelled or returned, in USD.
+    type: simple
+    type_params:
+      measure: gross_margin
+
+  - name: repeat_customer_rate
+    label: Repeat customer rate
+    description: >
+      Customers with 2 or more orders divided by customers with at least one order, lifetime as of today.
+      Do not use a time window with it: its time dimension is the signup date, not the order date.
+    type: ratio
+    type_params:
+      numerator: repeat_customers
+      denominator: customers_with_orders
+
+  # Helper metrics: a ratio metric in MetricFlow must divide one metric by another.
+  - name: repeat_customers
+    label: Repeat customers
+    description: Customers with 2 or more lifetime orders. Numerator of repeat_customer_rate.
+    type: simple
+    type_params:
+      measure: repeat_customers
+
+  - name: customers_with_orders
+    label: Customers with orders
+    description: Customers with at least one lifetime order. Denominator of repeat_customer_rate.
+    type: simple
+    type_params:
+      measure: customers_with_orders

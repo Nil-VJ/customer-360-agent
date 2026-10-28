@@ -31,7 +31,10 @@ flowchart LR
     fct_order_items["fct_order_items<br/>partition ordered_at (month)<br/>cluster customer_id"]
     fct_orders["fct_orders<br/>items, gross/net revenue, margin<br/>partition ordered_at (month)<br/>cluster customer_id"]
     dim_customer["dim_customer<br/>age_band, order stats, RFM,<br/>top_category, is_repeat"]
+    spine["metricflow_time_spine<br/>one row per day · MetricFlow only"]
   end
+
+  semantic["Semantic layer (MetricFlow)<br/>orders · order_items · customers<br/>6 metrics, see semantic_layer.md"]
 
   users --> stg_users
   orders --> stg_orders
@@ -50,6 +53,11 @@ flowchart LR
   stg_users --> dim_customer
   fct_orders --> dim_customer
   fct_order_items --> dim_customer
+
+  fct_orders --> semantic
+  fct_order_items --> semantic
+  dim_customer --> semantic
+  spine --> semantic
 ```
 
 ## Rules carried in the models
