@@ -162,3 +162,6 @@ dbt_internal_packages/
 
 # Editor
 .vscode/
+
+# macOS
+.DS_Store
