@@ -67,15 +67,21 @@ This file says how to work on it.
 
 - Agent logic is a plain Python function `answer(question) -> (text, sql, rows)`.
   It runs first as a command-line loop (`python agent.py`). Streamlit (`app.py`) wraps it in Phase 5.
-- Context = mart table and column descriptions from `target/manifest.json`. Until the semantic layer exists (Phase 4),
-  metric definitions (net revenue, AOV, repeat rate) live in the mart column descriptions.
-- Tool `run_sql(query)`:
+- Context = metric and dimension definitions from `target/semantic_manifest.json`, plus mart table and column
+  descriptions from `target/manifest.json` (the time spine is hidden).
+- Two tools:
+  - `query_metric(metrics, group_by, where, start_time, end_time, order_by, limit)`: runs `mf query --explain`,
+    so MetricFlow writes the SQL from the semantic layer YAML. It does not run the SQL itself.
+  - `run_sql(query)`: SQL the model writes on the marts.
+- Routing: defined metrics (net revenue, orders, active customers, AOV, gross margin, repeat customer rate)
+  go to `query_metric`. Everything else (customer lists, other counts and shares) goes to `run_sql`,
+  which is also the fallback when a dimension or filter is not in the semantic layer.
+- One guard for both tools. Every query, including MetricFlow's, goes through `run_sql`:
   1. BigQuery dry run first. Reject unless statement type is SELECT and every referenced table is in `c360_marts`.
-     (Check that the dry-run job exposes these; if not, fall back to parsing with `sqlglot` and ask me first.)
   2. Run with `maximum_bytes_billed` = 1 GB; add `LIMIT 200` if missing.
   3. Return rows as JSON, max 200.
 - If a query fails twice or the question is outside the marts, say so instead of guessing.
-- Every answer shows the SQL it ran and any assumption (e.g. date window).
+- Every answer shows every query it ran, labelled with its tool, and any assumption (e.g. date window).
 - API key from `.env` (`ANTHROPIC_API_KEY`); `.env` is in `.gitignore`.
 
 ## Phases
